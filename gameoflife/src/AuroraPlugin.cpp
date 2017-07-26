@@ -15,14 +15,14 @@
 
     AuroraPlugin.cpp
 
-    Created on: Mar 30, 2017
-    Author: Nathan Dyck
+    Created on: Jul 23, 2017
+    Author: Elliot Ford
 
     Description:
-    Layout processing based on ShootingStars by Tom Rodinger.
-    Each source colour is taken from the user's palette and tracks an associated FFT bin.
-    Trigger points for adding new sources are taken when a beat is detected in each individual bin.
-    The intensity of the source is based on a log scale comparing with the highest beat detected in that bin over all time.
+    Beat Detection and Panel Color calculations based on FrequncyStars by Nathan Dyck.
+    Each light source on the grid follows the rules to Conway's Game of Life.
+    Whenever a beat is detected a new "glider" is randomly spawned at the center of one of the panels.
+    each loop calculates the next generation of live cells and removes the dead cells from the grid.
  */
 
 
@@ -36,6 +36,7 @@
 #include <string.h>
 #include "Logger.h"
 #include "PluginFeatures.h"
+#include <stdlib.h>
 
 
 #ifdef __cplusplus
@@ -51,18 +52,18 @@ extern "C" {
 #endif
 
 #define MAX_PALETTE_COLOURS 7   // if more colours then this, we will use just the first this many
-#define MAX_SOURCES 7   // maxiumum sources
+#define MAX_CELLS 35   // maxiumum number of cells, might increase this considering a glider takes 5 cells
 #define BASE_COLOUR_R 0 // these three settings defined the background colour; set to black
 #define BASE_COLOUR_G 0
 #define BASE_COLOUR_B 0
 #define ADJACENT_PANEL_DISTANCE 86.599995   // hard coded distance between adjacent panels; this ideally should be autodetected
-#define TRANSITION_TIME 1  // the transition time to send to panels; set to 100ms currently
+#define TRANSITION_TIME 2  // the transition time to send to panels; set to 100ms currently
 #define MINIMUM_INTENSITY 0.2  // the minimum intensity of a source
 #define TRIGGER_THRESHOLD 0.5 // used to calculate whether to add a source
 #define SPAWN_AMOUNT 1
 
 // Here we store the information accociated with each light source like current
-// position, velocity and colour. The information is stored in a list called sources.
+// position, velocity and colour. The information is stored in a list called cells.
 typedef struct {
     float x;
     float y;
@@ -70,7 +71,8 @@ typedef struct {
     int G;
     int B;
     bool alive;
-} source_t;
+
+} cell_t;
 
 /** Here we store the information accociated with each frequency bin. This
  allows for tracking a degree of historical information.
@@ -89,8 +91,8 @@ typedef struct {
 static RGB_t* paletteColours = NULL; // this is our saved pointer to the colour palette
 static int nColours = 0;             // the number of colours in the palette
 static LayoutData *layoutData; // this is our saved pointer to the panel layout information
-static source_t sources[MAX_PALETTE_COLOURS*5]; // this is our array for sources
-static int nSources = 0;
+static cell_t cells[MAX_PALETTE_COLOURS*5]; // this is our array for cells
+static int ncells = 0;
 static freq_bin freq_bins[MAX_PALETTE_COLOURS]; // this is our array for frequency bin historical information.
 
 /**
@@ -149,11 +151,11 @@ void initPlugin() {
 
 
 
-/** Removes a light source from the list of light sources */
+/** Removes a light source from the list of light cells */
 void removeSource(int idx)
 {
-    memmove(sources + idx, sources + idx + 1, sizeof(source_t) * (nSources - idx - 1));
-    nSources--;
+    memmove(cells + idx, cells + idx + 1, sizeof(cell_t) * (ncells - idx - 1));
+    ncells--;
 }
 
 /** Compute cartesian distance between two points */
@@ -166,8 +168,8 @@ float distance(float x1, float y1, float x2, float y2)
 
 void findDead() {
     int i = 0;
-    while(i < nSources){
-      if(sources[i].alive == false) {
+    while(i < ncells){
+      if(cells[i].alive == false) {
         removeSource(i);
       } else {
         i++;
@@ -197,7 +199,7 @@ void point2line(float x3, float y3, float x1, float y1, float x2, float y2, floa
 }
 
 /**
-  * @description: Adds a light source to the list of light sources. The light source will have a particular colour
+  * @description: Adds a light source to the list of light cells. The light source will have a particular colour
   * and intensity and will move at a particular speed.
 */
 void addSource(int paletteIndex, float intensity)
@@ -229,53 +231,56 @@ void addSource(int paletteIndex, float intensity)
     G *= intensity;
     B *= intensity;
 
-    // if we have a lot of light sources already, let's bump off the oldest one
-    if(nSources >= MAX_SOURCES) {
+    // if we're going to overflow the matrix then kill off cells to make space
+    // TODO: we should generate a array of items to add and then make space and add the new items
+    if(ncells >= MAX_CELLS) {
       for(int j =0; j < 5; j++) {
         removeSource(0);
       }
     }
-    // add all the information to the list of light sources
+    // add all the information to the list of light cells
     //Spawns a Conways game of life gliders
-    sources[nSources].x = x;
-    sources[nSources].y = y+1;
-    sources[nSources].R = (int)R;
-    sources[nSources].G = (int)G;
-    sources[nSources].B = (int)B;
-    sources[nSources].alive = true;
-    nSources++;
+    //TODO: this currently spawns a glider facing one direction, make it so the direction is random
+    //TODO: make it so the type of Game of Life item that is spawned is random, Glider, Blinker, Block, etc.
+    cells[ncells].x = x;
+    cells[ncells].y = y+1;
+    cells[ncells].R = (int)R;
+    cells[ncells].G = (int)G;
+    cells[ncells].B = (int)B;
+    cells[ncells].alive = true;
+    ncells++;
 
-    sources[nSources].x = x+1;
-    sources[nSources].y = y;
-    sources[nSources].R = (int)R;
-    sources[nSources].G = (int)G;
-    sources[nSources].B = (int)B;
-    sources[nSources].alive = true;
-    nSources++;
+    cells[ncells].x = x+1;
+    cells[ncells].y = y;
+    cells[ncells].R = (int)R;
+    cells[ncells].G = (int)G;
+    cells[ncells].B = (int)B;
+    cells[ncells].alive = true;
+    ncells++;
 
-    sources[nSources].x = x-1;
-    sources[nSources].y = y-1;
-    sources[nSources].R = (int)R;
-    sources[nSources].G = (int)G;
-    sources[nSources].B = (int)B;
-    sources[nSources].alive = true;
-    nSources++;
+    cells[ncells].x = x-1;
+    cells[ncells].y = y-1;
+    cells[ncells].R = (int)R;
+    cells[ncells].G = (int)G;
+    cells[ncells].B = (int)B;
+    cells[ncells].alive = true;
+    ncells++;
 
-    sources[nSources].x = x;
-    sources[nSources].y = y-1;
-    sources[nSources].R = (int)R;
-    sources[nSources].G = (int)G;
-    sources[nSources].B = (int)B;
-    sources[nSources].alive = true;
-    nSources++;
+    cells[ncells].x = x;
+    cells[ncells].y = y-1;
+    cells[ncells].R = (int)R;
+    cells[ncells].G = (int)G;
+    cells[ncells].B = (int)B;
+    cells[ncells].alive = true;
+    ncells++;
 
-    sources[nSources].x = x+1;
-    sources[nSources].y = y-1;
-    sources[nSources].R = (int)R;
-    sources[nSources].G = (int)G;
-    sources[nSources].B = (int)B;
-    sources[nSources].alive = true;
-    nSources++;
+    cells[ncells].x = x+1;
+    cells[ncells].y = y-1;
+    cells[ncells].R = (int)R;
+    cells[ncells].G = (int)G;
+    cells[ncells].B = (int)B;
+    cells[ncells].alive = true;
+    ncells++;
   }
 }
 
@@ -290,19 +295,19 @@ void renderPanel(Panel *panel, int *returnR, int *returnG, int *returnB)
     float B = BASE_COLOUR_B;
     int i;
 
-    // Iterate through all the sources
+    // Iterate through all the cells
     // Depending how close the source is to the panel, we take some fraction of its colour and mix it into an
-    // accumulator. Newest sources have the most weight. Old sources die away until they are gone.
-    for(i = 0; i < nSources; i++) {
-        float d = distance(panel->shape->getCentroid().x, panel->shape->getCentroid().y, sources[i].x, sources[i].y);
+    // accumulator. Newest cells have the most weight. Old cells die away until they are gone.
+    for(i = 0; i < ncells; i++) {
+        float d = distance(panel->shape->getCentroid().x, panel->shape->getCentroid().y, cells[i].x, cells[i].y);
         d = d / ADJACENT_PANEL_DISTANCE;
         float d2 = d * d;
         float factor = 1.0 / (d2 * 1.5 + 1.0); // determines how much of the source's colour we mix in (depends on distance)
                                                // the formula is not based on physics, it is fudged to get a good effect
                                                // the formula yields a number between 0 and 1
-        R = R * (1.0 - factor) + sources[i].R * factor;
-        G = G * (1.0 - factor) + sources[i].G * factor;
-        B = B * (1.0 - factor) + sources[i].B * factor;
+        R = R * (1.0 - factor) + cells[i].R * factor;
+        G = G * (1.0 - factor) + cells[i].G * factor;
+        B = B * (1.0 - factor) + cells[i].B * factor;
     }
     *returnR = (int)R;
     *returnG = (int)G;
@@ -310,49 +315,58 @@ void renderPanel(Panel *panel, int *returnR, int *returnG, int *returnB)
 }
 
 void spawn(int x, int y, int R, int G, int B) {
-  if(nSources >= MAX_SOURCES) {
+  if(ncells >= MAX_CELLS) {
     removeSource(0);
   }
-  // add all the information to the list of light sources
-  sources[nSources].x = x;
-  sources[nSources].y = y;
-  sources[nSources].R = (int)R;
-  sources[nSources].G = (int)G;
-  sources[nSources].B = (int)B;
-  sources[nSources].alive = true;
-  nSources++;
+  // add all the information to the list of light cells
+  cells[ncells].x = x;
+  cells[ncells].y = y;
+  cells[ncells].R = (int)R;
+  cells[ncells].G = (int)G;
+  cells[ncells].B = (int)B;
+  cells[ncells].alive = true;
+  ncells++;
 }
 
 /**
-  * Move the positions of all the light sources based on their velocities. If any particular
+  * Move the positions of all the light cells based on their velocities. If any particular
   * light source has moved far from the origin then it will be removed from the light source list.
   */
-void propogateSources(void)
+void generateNextGeneration(void)
 {
-    //Find the overpopulated/underpopulated live cells
-    for(int i = 0; i < nSources; i++) {
-      int numNeighbors = 0;
-      for(int j = 0; j < nSources; j++) {
-
-        if (sources[i].x + 1 == sources[j].x || sources[i].x - 1 == sources[j].x || sources[i].y + 1 == sources[j].y || sources[i].y - 1 == sources[j].y) {
-          numNeighbors++;
-          for(int k = 0; k < nSources; k++) {
-            if((sources[i].x + 1 == sources[j].y + 1 && sources[j].y + 1 == sources[k].x - 1) ||
-               (sources[i].x + 1 == sources[j].y + 1 && sources[j].y + 1 == sources[k].y - 1) ||
-               (sources[i].x + 1 == sources[j].y - 1 && sources[j].y - 1 == sources[k].x - 1)) {
-                 int averageR = (int)(sources[i].R + sources[j].R + sources[k].R)*.33;
-                 int averageG = (int)(sources[i].G + sources[j].G + sources[k].G)*.33;
-                 int averageB = (int)(sources[i].B + sources[j].B + sources[k].B)*.33;
-                spawn(sources[i].x + 1, sources[i].y, averageR, averageG, averageB);
-               }
-          }
-        }
-        if(numNeighbors < 2 || numNeighbors > 3) {
-          sources[i].alive = false;
-        }
+  //Find the overpopulated/underpopulated live cells
+  for(int i = 0; i < ncells; i++) {
+    int numNeighbors = 0;
+    for(int j = 0; j < ncells; j++) {
+      if (cells[i].x + 1 == cells[j].x || cells[i].x - 1 == cells[j].x || cells[i].y + 1 == cells[j].y || cells[i].y - 1 == cells[j].y) {
+        numNeighbors++;
+      /**  for(int k = 0; k < ncells; k++) {
+          if((cells[i].x + 1 == cells[j].y + 1 && cells[j].y + 1 == cells[k].x - 1) ||
+             (cells[i].x + 1 == cells[j].y + 1 && cells[j].y + 1 == cells[k].y - 1) ||
+             (cells[i].x + 1 == cells[j].y - 1 && cells[j].y - 1 == cells[k].x - 1) ||
+             (cells[i].x + 1 == cells[j].y - 1 && cells[j].y - 1 == cells[k].x - 1)){
+               int averageR = (int)(cells[i].R + cells[j].R + cells[k].R)*.33;
+               int averageG = (int)(cells[i].G + cells[j].G + cells[k].G)*.33;
+               int averageB = (int)(cells[i].B + cells[j].B + cells[k].B)*.33;
+              spawn(cells[i].x + 1, cells[i].y, averageR, averageG, averageB);
+            } **/
       }
     }
+    if(numNeighbors < 2 || numNeighbors > 3) {
+      cells[i].alive = false;
+    }
+  }
+
+  //Find where to spawn new cells
+  cell_t* new_cells;
+  for(int i = 0; i < ncells; i++) {
+    int numNeighbors = 0;
+    for(int j = 0; j < ncells; j++) {
+      if (cells[j].x - cells[i].x < 2 && cells[j].x - cells[i].x > 1 && abs(cells[i].y - cells[j].y) < 2 )
+    }
+  }
 }
+
 
 
 /**
@@ -456,8 +470,8 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
         frames[i].transTime = TRANSITION_TIME;
     }
 
-    // move all the light sources so they are ready for the next frame
-    propogateSources();
+    // move all the light cells so they are ready for the next frame
+    generateNextGeneration();
     findDead();
 
     // this algorithm renders every panel at every frame
