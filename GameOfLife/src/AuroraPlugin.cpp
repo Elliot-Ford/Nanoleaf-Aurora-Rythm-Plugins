@@ -19,7 +19,7 @@
     Author: Elliot Ford
 
     Description:
-    Beat Detection and Panel Color calculations based on FrequncyStars by Nathan Dyck.
+    Beat Detection, FFT to light source color and Panel Color calculations based on FrequncyStars by Nathan Dyck.
     Each light source on the grid follows the rules to Conway's Game of Life.
     Whenever a beat is detected a new "glider" is randomly spawned at the center of one of the panels.
     each loop calculates the next generation of live cells and removes the dead cells from the grid.
@@ -37,7 +37,8 @@
 #include "Logger.h"
 #include "PluginFeatures.h"
 #include <stdlib.h>
-
+#include <vector>
+#include <algorithm>
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,27 +53,28 @@ extern "C" {
 #endif
 
 #define MAX_PALETTE_COLOURS 7   // if more colours then this, we will use just the first this many
-#define MAX_CELLS 35   // maxiumum number of cells, might increase this considering a glider takes 5 cells
+#define MAX_CELLS 50   // maxiumum number of cells, might increase this considering a glider takes 5 cells
 #define BASE_COLOUR_R 0 // these three settings defined the background colour; set to black
 #define BASE_COLOUR_G 0
 #define BASE_COLOUR_B 0
 #define ADJACENT_PANEL_DISTANCE 86.599995   // hard coded distance between adjacent panels; this ideally should be autodetected
 #define TRANSITION_TIME 2  // the transition time to send to panels; set to 100ms currently
 #define MINIMUM_INTENSITY 0.2  // the minimum intensity of a source
-#define TRIGGER_THRESHOLD 0.5 // used to calculate whether to add a source
-#define SPAWN_AMOUNT 1
+#define TRIGGER_THRESHOLD 0.7 // used to calculate whether to add a source
 
 // Here we store the information accociated with each light source like current
 // position, velocity and colour. The information is stored in a list called cells.
-typedef struct {
+struct cell_t {
     float x;
     float y;
     int R;
     int G;
     int B;
-    bool alive;
+    bool operator==(const cell_t &b) {
+      return x == b.x && y == b.y;
+    }
 
-} cell_t;
+};
 
 /** Here we store the information accociated with each frequency bin. This
  allows for tracking a degree of historical information.
@@ -91,9 +93,23 @@ typedef struct {
 static RGB_t* paletteColours = NULL; // this is our saved pointer to the colour palette
 static int nColours = 0;             // the number of colours in the palette
 static LayoutData *layoutData; // this is our saved pointer to the panel layout information
-static cell_t cells[MAX_PALETTE_COLOURS*5]; // this is our array for cells
+static cell_t cells[MAX_CELLS]; // this is our array for cells
 static int ncells = 0;
 static freq_bin freq_bins[MAX_PALETTE_COLOURS]; // this is our array for frequency bin historical information.
+/**
+//arrays represting the different types of game of life items to spawn, 0 for no item, 1 for spawn item
+//Spaceships
+static int[3][3] glider = [[1,0,0],[0,0,1],[1,1,1]];
+static int[4][5] lwss = [[1, 0, 0, 1, 0], [0, 0, 0, 0, 1], [1, 0, 0, 0, 1], [0, 1, 1, 1, 1]] //Lightweight Spaceship
+
+//Oscillators
+static int[3][3] blinker = [[0,1,0],[0,1,0],[0,1,0]];
+static int[2][4] toad = [[0, 1, 1, 1], [1, 1, 1, 0]];
+
+//Stil Lifes
+static int[2][2] block = [[1, 1], [1, 1]];
+static int[3][4] beehive = [[0, 1, 1, 0], [1, 0, 0, 1], [0, 1, 1, 0]];
+**/
 
 /**
   * @description: add a value to a running max.
@@ -155,6 +171,7 @@ void initPlugin() {
 void removeSource(int idx)
 {
     memmove(cells + idx, cells + idx + 1, sizeof(cell_t) * (ncells - idx - 1));
+    //cells.erase(cells.begin() + idx);
     ncells--;
 }
 
@@ -166,38 +183,6 @@ float distance(float x1, float y1, float x2, float y2)
     return sqrt(dx * dx + dy * dy);
 }
 
-void findDead() {
-    int i = 0;
-    while(i < ncells){
-      if(cells[i].alive == false) {
-        removeSource(i);
-      } else {
-        i++;
-      }
-    }
-}
-
-/**
-  * @description: compute the distance from a point to a line
-  * @param: x1, y1 and x2, y2 are two points that define the line
-  *         x3, y3 is the point
-  * @return: dist is the computed distance from the point to the closest point on the line
-  *          u is a scalar representing how far along the line do we need to go to get near
-  *          to the point
-  */
-void point2line(float x3, float y3, float x1, float y1, float x2, float y2, float *dist, float *u) // x3,y3 is the point
-{
-    float px = x2 - x1;
-    float py = y2 - y1;
-    float magnitude_squared = px * px + py * py;
-    *u = ((x3 - x1) * px + (y3 - y1) * py) / magnitude_squared;
-    float x = x1 + (*u) * px;
-    float y = y1 + (*u) * py;
-    float dx = x - x3;
-    float dy = y - y3;
-    *dist = sqrt(dx * dx + dy * dy);
-}
-
 /**
   * @description: Adds a light source to the list of light cells. The light source will have a particular colour
   * and intensity and will move at a particular speed.
@@ -206,21 +191,25 @@ void addSource(int paletteIndex, float intensity)
 {
     float x;
     float y;
-    //int i;
 
     // we need at least two panels to do anything meaningful in here
     if(layoutData->nPanels < 2) {
         return;
     }
-    for(int i = 0; i < SPAWN_AMOUNT; i++){
     // pick a random panel
     int n1;
     //PRINTLOG(n1);
     //int n2;
-    //while(1) {
-        n1 = drand48() * layoutData->nPanels;
-        x = layoutData->panels[n1].shape->getCentroid().x;
-        y = layoutData->panels[n1].shape->getCentroid().y;
+    bool toggle = true;
+    while(toggle) {
+      toggle = false;
+      n1 = drand48() * layoutData->nPanels;
+      x = layoutData->panels[n1].shape->getCentroid().x;
+      y = layoutData->panels[n1].shape->getCentroid().y;
+      for(int i = 0; i < ncells; i++) {
+        if(cells[i].x == x && cells[i].y == y);
+      }
+    }
 
 
     // decide in the colour of this light source and factor in the intensity to arrive at an RGB value
@@ -233,21 +222,23 @@ void addSource(int paletteIndex, float intensity)
 
     // if we're going to overflow the matrix then kill off cells to make space
     // TODO: we should generate a array of items to add and then make space and add the new items
-    if(ncells >= MAX_CELLS) {
+    if(ncells >= MAX_CELLS-5) {
       for(int j =0; j < 5; j++) {
         removeSource(0);
+        ncells--;
       }
     }
+
     // add all the information to the list of light cells
     //Spawns a Conways game of life gliders
     //TODO: this currently spawns a glider facing one direction, make it so the direction is random
     //TODO: make it so the type of Game of Life item that is spawned is random, Glider, Blinker, Block, etc.
-    cells[ncells].x = x;
-    cells[ncells].y = y+1;
+
+    cells[ncells].x = x+1;
+    cells[ncells].y = y-1;
     cells[ncells].R = (int)R;
     cells[ncells].G = (int)G;
     cells[ncells].B = (int)B;
-    cells[ncells].alive = true;
     ncells++;
 
     cells[ncells].x = x+1;
@@ -255,15 +246,6 @@ void addSource(int paletteIndex, float intensity)
     cells[ncells].R = (int)R;
     cells[ncells].G = (int)G;
     cells[ncells].B = (int)B;
-    cells[ncells].alive = true;
-    ncells++;
-
-    cells[ncells].x = x-1;
-    cells[ncells].y = y-1;
-    cells[ncells].R = (int)R;
-    cells[ncells].G = (int)G;
-    cells[ncells].B = (int)B;
-    cells[ncells].alive = true;
     ncells++;
 
     cells[ncells].x = x;
@@ -271,17 +253,22 @@ void addSource(int paletteIndex, float intensity)
     cells[ncells].R = (int)R;
     cells[ncells].G = (int)G;
     cells[ncells].B = (int)B;
-    cells[ncells].alive = true;
     ncells++;
 
-    cells[ncells].x = x+1;
+    cells[ncells].x = x-1;
     cells[ncells].y = y-1;
     cells[ncells].R = (int)R;
     cells[ncells].G = (int)G;
     cells[ncells].B = (int)B;
-    cells[ncells].alive = true;
     ncells++;
-  }
+
+    cells[ncells].x = x;
+    cells[ncells].y = y+1;
+    cells[ncells].R = (int)R;
+    cells[ncells].G = (int)G;
+    cells[ncells].B = (int)B;
+    ncells++;
+
 }
 
 /**
@@ -324,7 +311,6 @@ void spawn(int x, int y, int R, int G, int B) {
   cells[ncells].R = (int)R;
   cells[ncells].G = (int)G;
   cells[ncells].B = (int)B;
-  cells[ncells].alive = true;
   ncells++;
 }
 
@@ -334,39 +320,159 @@ void spawn(int x, int y, int R, int G, int B) {
   */
 void generateNextGeneration(void)
 {
+  std::vector<cell_t> new_cells;
+  //  PRINTLOG("#0 new_cells: %d\n", new_cells.size());
+
+
   //Find the overpopulated/underpopulated live cells
   for(int i = 0; i < ncells; i++) {
     int numNeighbors = 0;
     for(int j = 0; j < ncells; j++) {
-      if (cells[i].x + 1 == cells[j].x || cells[i].x - 1 == cells[j].x || cells[i].y + 1 == cells[j].y || cells[i].y - 1 == cells[j].y) {
+      if ((cells[i].x + 1 > cells[j].x &&
+          cells[i].x - 1 < cells[j].x) &&
+          (cells[i].y + 1 > cells[j].y ||
+          cells[i].y - 1 < cells[j].y)) {
         numNeighbors++;
-      /**  for(int k = 0; k < ncells; k++) {
-          if((cells[i].x + 1 == cells[j].y + 1 && cells[j].y + 1 == cells[k].x - 1) ||
-             (cells[i].x + 1 == cells[j].y + 1 && cells[j].y + 1 == cells[k].y - 1) ||
-             (cells[i].x + 1 == cells[j].y - 1 && cells[j].y - 1 == cells[k].x - 1) ||
-             (cells[i].x + 1 == cells[j].y - 1 && cells[j].y - 1 == cells[k].x - 1)){
-               int averageR = (int)(cells[i].R + cells[j].R + cells[k].R)*.33;
-               int averageG = (int)(cells[i].G + cells[j].G + cells[k].G)*.33;
-               int averageB = (int)(cells[i].B + cells[j].B + cells[k].B)*.33;
-              spawn(cells[i].x + 1, cells[i].y, averageR, averageG, averageB);
-            } **/
       }
     }
-    if(numNeighbors < 2 || numNeighbors > 3) {
-      cells[i].alive = false;
+    numNeighbors--;
+    if(numNeighbors == 2 || numNeighbors == 3) {
+      cell_t new_cell;
+      new_cell.x = cells[i].x;
+      new_cell.y = cells[i].y;
+      new_cell.R = cells[i].R;
+      new_cell.G = cells[i].G;
+      new_cell.B = cells[i].B;
+      new_cells.push_back(new_cell);
+
     }
   }
+  //PRINTLOG("#1 new_cells: %d\n", new_cells.size());
 
   //Find where to spawn new cells
-  cell_t* new_cells;
   for(int i = 0; i < ncells; i++) {
     int numNeighbors = 0;
+    RGB_t new_rgb;
     for(int j = 0; j < ncells; j++) {
-      if (cells[j].x - cells[i].x < 2 && cells[j].x - cells[i].x > 1 && abs(cells[i].y - cells[j].y) < 2 )
+      if ((cells[i].x + 1 == cells[j].x ||
+          cells[i].x + 2 == cells[j].x ||
+          cells[i].y + 1 == cells[j].y ||
+          cells[i].y + 2 == cells[j].y) &&
+          (cells[i].x + 1 != cells[j].x ||
+            cells[i].y + 1 != cells[j].y))   {
+            numNeighbors++;
+            new_rgb.R += cells[j].R;
+            new_rgb.G += cells[j].G;
+            new_rgb.B += cells[j].B;
+          }
+    }
+    if(numNeighbors == 3) {
+      cell_t new_cell;
+      new_cell.x = cells[i].x + 1;
+      new_cell.y = cells[i].y + 1;
+      new_cell.R = (int)new_rgb.R/3;
+      new_cell.G = (int)new_rgb.G/3;
+      new_cell.B = (int)new_rgb.B/3;
+      new_cells.push_back(new_cell);
     }
   }
-}
 
+  for(int i = 0; i < ncells; i++) {
+    int numNeighbors = 0;
+    RGB_t new_rgb;
+    for(int j = 0; j < ncells; j++) {
+      if ((cells[i].x - 1 == cells[j].x ||
+          cells[i].x - 2 == cells[j].x ||
+          cells[i].y + 1 == cells[j].y ||
+          cells[i].y + 2 == cells[j].y)&&
+          (cells[i].x - 1 != cells[j].x ||
+            cells[i].y + 1 != cells[j].y))   {
+            numNeighbors++;
+            new_rgb.R += cells[j].R;
+            new_rgb.G += cells[j].G;
+            new_rgb.B += cells[j].B;
+          }
+    }
+    if(numNeighbors == 3) {
+      cell_t new_cell;
+      new_cell.x = cells[i].x - 1;
+      new_cell.y = cells[i].y + 1;
+      new_cell.R = cells[i].R; //(int)new_rgb.R/3;
+      new_cell.G = cells[i].G; //(int)new_rgb.G/3;
+      new_cell.B = cells[i].B; //(int)new_rgb.B/3;
+      new_cells.push_back(new_cell);
+    }
+  }
+  for(int i = 0; i < ncells; i++) {
+    int numNeighbors = 0;
+    RGB_t new_rgb;
+    for(int j = 0; j < ncells; j++) {
+      if ((cells[i].x - 1 == cells[j].x ||
+          cells[i].x - 2 == cells[j].x ||
+          cells[i].y - 1 == cells[j].y ||
+          cells[i].y - 2 == cells[j].y)&&
+          (cells[i].x - 1 != cells[j].x ||
+            cells[i].y - 1 != cells[j].y))   {
+            numNeighbors++;
+            new_rgb.R += cells[j].R;
+            new_rgb.G += cells[j].G;
+            new_rgb.B += cells[j].B;
+          }
+    }
+    if(numNeighbors == 3) {
+      cell_t new_cell;
+      new_cell.x = cells[i].x - 1;
+      new_cell.y = cells[i].y - 1;
+      new_cell.R = (int)new_rgb.R/3;
+      new_cell.G = (int)new_rgb.G/3;
+      new_cell.B = (int)new_rgb.B/3;
+      new_cells.push_back(new_cell);
+    }
+  }
+
+  //PRINTLOG("#2 new_cells: %d\n", new_cells.size());
+
+  //remove duplicates
+  //TODO: This doesn't seem to be working correctly
+  //new_cells.erase( unique( new_cells.begin(), new_cells.end() ), new_cells.end());
+  int i = 0;
+  while(i < new_cells.size()) {
+    for(int j = i+1; j < new_cells.size(); j++) {
+      if(new_cells[i]==new_cells[j]) {
+        new_cells.erase(new_cells.begin()+j);
+      }
+
+    }
+    i++;
+  }
+
+  while(new_cells.size() > MAX_CELLS) {
+    new_cells.erase(new_cells.begin());
+  }
+  //PRINTLOG("new_cells size: %d\n", new_cells.size());
+
+  //for(int i = 0; i < new_cells.size(); i++) {
+  //  PRINTLOG("new_cells %d x: %f y: %f\n", i, new_cells[i].x, new_cells[i].y);
+  //}
+  // overwrite cells array with new generation, in reverse
+  //int size = new_cells.size();
+  //for(int i = 0; i < size; i++) {
+  //  cells[i] = new_cells[i];
+  //}
+  for(int i = 0; i < ncells; i++) {
+    removeSource(0);
+  }
+  for(int i = 0; i < new_cells.size(); i++) {
+    cells[i] = new_cells[i];
+  }
+  //if(ncells < new_cells.size()) {
+  ncells = new_cells.size();
+  //}
+  for(int i = 0; i < new_cells.size(); i++){
+    PRINTLOG("new_cell %d (x,y) (%f, %f)\n", i, new_cells[i].x, new_cells[i].y);
+  }
+  //PRINTLOG("ncells: %d new_cells: %d\n", ncells, new_cells.size());
+}
 
 
 /**
@@ -425,7 +531,7 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
     int i;
     uint8_t * fftBins = getFftBins();
 
-#define SKIP_COUNT 50
+#define SKIP_COUNT 200
     static int cnt = 0;
     if (cnt < SKIP_COUNT){
         cnt++;
@@ -458,6 +564,9 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
         }
 
     }
+    for(int i = 0; i < ncells; i++) {
+      PRINTLOG("cell %d (x,y) (%f, %f)\n",i, cells[i].x, cells[i].y);
+    }
 
 
     // iterate through all the pals and render each one
@@ -472,8 +581,6 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
 
     // move all the light cells so they are ready for the next frame
     generateNextGeneration();
-    findDead();
-
     // this algorithm renders every panel at every frame
     *nFrames = layoutData->nPanels;
 }
