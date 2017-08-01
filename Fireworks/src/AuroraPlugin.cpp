@@ -58,7 +58,7 @@ extern "C" {
 #define ADJACENT_PANEL_DISTANCE 86.599995   // hard coded distance between adjacent panels; this ideally should be autodetected
 #define TRANSITION_TIME 1  // the transition time to send to panels; set to 100ms currently
 #define MINIMUM_INTENSITY 0.2  // the minimum intensity of a source
-#define TRIGGER_THRESHOLD 0.4 // used to calculate whether to add a source
+#define TRIGGER_THRESHOLD 0.5 // used to calculate whether to add a source
 #define SPAWN_AMOUNT 1
 
 // Here we store the information accociated with each light source like current
