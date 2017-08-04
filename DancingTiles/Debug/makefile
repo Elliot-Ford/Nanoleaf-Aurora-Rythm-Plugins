@@ -39,10 +39,10 @@ endif
 # Add inputs and outputs from these tool invocations to the build variables
 
 # All Target
-all: dancingTiles.so
+all: Fireworks.so
 
 # Tool invocations
-dancingTiles.so: $(OBJS) $(USER_OBJS)
+Fireworks.so: $(OBJS) $(USER_OBJS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: Cross G++ Linker'
 	g++ -L../Utilities -u _passLayoutData -u _passColorPalette -u _dataManagerCleanup -u _getEnabledFeatures -u _initRhythmFeatures -u _updateRhythmFeatures -u _deinitRhythmFeatures -u _initBeatFeatures -u _updateBeatFeatures -u _deinitBeatFeatures -shared -o "libFrequencyStars.so" $(OBJS) $(USER_OBJS) $(LIBS)

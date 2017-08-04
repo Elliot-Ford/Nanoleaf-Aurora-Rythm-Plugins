@@ -20,8 +20,8 @@
 
     Description:
     Beat Detection, FFT to light source color and Panel Color calculations based on FrequncyStars by Nathan Dyck.
-    Spawns a new light source at the center of a random pane.
-    When max amount of light sources reached, delete the "oldest" light source.
+    Spawns a new light source at the center of a random pane when beat detected color based on fft.
+    Increments age of sources every loop and removes a source either when array would be overflowed or age > lifespan.
 
  */
 
@@ -50,7 +50,7 @@ extern "C" {
 }
 #endif
 
-#define MAX_PALETTE_COLOURS 8   // if more colours then this, we will use just the first this many
+#define MAX_PALETTE_COLOURS 9   // if more colours then this, we will use just the first this many
 #define MAX_SOURCES 9   // maxiumum sources
 #define BASE_COLOUR_R 0 // these three settings defined the background colour; set to black
 #define BASE_COLOUR_G 0
@@ -60,7 +60,7 @@ extern "C" {
 #define MINIMUM_INTENSITY 0.2  // the minimum intensity of a source
 #define TRIGGER_THRESHOLD 0.5 // used to calculate whether to add a source
 #define SPAWN_AMOUNT 1
-#define LINEAR_FADE_TIME 1
+#define LIFESPAN 1 //the max number of cycles a source will live
 
 // Here we store the information accociated with each light source like current
 // position, velocity and colour. The information is stored in a list called sources.
@@ -70,6 +70,7 @@ typedef struct {
     int R;
     int G;
     int B;
+    int age;
 } source_t;
 
 /** Here we store the information accociated with each frequency bin. This
@@ -141,7 +142,7 @@ void initPlugin() {
 
 
     // here we initialize our freqency bin values so that the plugin starts working reasonably well right away
-    for (int i = 0; i < nColours; i++) {
+    for (int i = 0; i < MAX_PALETTE_COLOURS; i++) {
         freq_bins[i].latest_minimum = 0;
         freq_bins[i].runningMax = 3;
         freq_bins[i].maximumTrigger = 1;
@@ -230,6 +231,7 @@ void addSource(int paletteIndex, float intensity)
     sources[nSources].R = (int)R;
     sources[nSources].G = (int)G;
     sources[nSources].B = (int)B;
+    sources[nSources].age = 0;
     //sources[nSources].alive = true;
     nSources++;
   }
@@ -367,9 +369,11 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
     }
 
     for(i = 0; i < nSources; i++) {
-      if(sources[i].R != 0) sources[i].R -= LINEAR_FADE_TIME;
-      if(sources[i].G != 0) sources[i].G -= LINEAR_FADE_TIME;
-      if(sources[i].B != 0) sources[i].B -= LINEAR_FADE_TIME;
+      if(sources[i].age == LIFESPAN) {
+        removeSource(0);
+      } else {
+        sources[i].age++;
+      }
     }
     // this algorithm renders every panel at every frame
     *nFrames = layoutData->nPanels;
