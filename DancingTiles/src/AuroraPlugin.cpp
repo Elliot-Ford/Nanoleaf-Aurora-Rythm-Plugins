@@ -50,17 +50,22 @@ extern "C" {
 }
 #endif
 
-#define MAX_PALETTE_COLOURS 9   // if more colours then this, we will use just the first this many
-#define MAX_SOURCES 9   // maxiumum sources
+#define MAX_PALETTE_nColors 7   // if more nColors then this, we will use just the first this many
+#define MAX_SOURCES 7   // maxiumum sources
 #define BASE_COLOUR_R 0 // these three settings defined the background colour; set to black
 #define BASE_COLOUR_G 0
 #define BASE_COLOUR_B 0
 #define ADJACENT_PANEL_DISTANCE 86.599995   // hard coded distance between adjacent panels; this ideally should be autodetected
 #define TRANSITION_TIME 1  // the transition time to send to panels; set to 100ms currently
 #define MINIMUM_INTENSITY 0.2  // the minimum intensity of a source
-#define TRIGGER_THRESHOLD 0.5 // used to calculate whether to add a source
+#define TRIGGER_THRESHOLD 0.65 // used to calculate whether to add a source
+//Light source consts
 #define SPAWN_AMOUNT 1
 #define LIFESPAN 1 //the max number of cycles a source will live
+//Light Diffusion consts
+#define TEMPO_DIVISOR 25 //default is 1.5
+#define TEMPO_ENABLED false //determines if the tempo is taken into consideration for the diffusion
+#define MININMUM_MULTIPLIER 2 //minimum multiplier value used. Default is 1.5
 
 // Here we store the information accociated with each light source like current
 // position, velocity and colour. The information is stored in a list called sources.
@@ -87,12 +92,12 @@ typedef struct {
     uint32_t secondPreviousPower;
 } freq_bin;
 
-static RGB_t* paletteColours = NULL; // this is our saved pointer to the colour palette
-static int nColours = 0;             // the number of colours in the palette
+static RGB_t* palettenColors = NULL; // this is our saved pointer to the colour palette
+static int nColors = 0;             // the number of nColors in the palette
 static LayoutData *layoutData; // this is our saved pointer to the panel layout information
 static source_t sources[MAX_SOURCES]; // this is our array for sources
 static int nSources = 0;
-static freq_bin freq_bins[MAX_PALETTE_COLOURS]; // this is our array for frequency bin historical information.
+static freq_bin freq_bins[MAX_PALETTE_nColors]; // this is our array for frequency bin historical information.
 
 /**
   * @description: add a value to a running max.
@@ -119,15 +124,15 @@ int addToRunningMax(int runningMax, int valueToAdd, int effectiveTrail) {
  */
 void initPlugin() {
 
-    getColorPalette(&paletteColours, &nColours);  // grab the palette colours and store a pointer to them for later use
-    PRINTLOG("The palette has %d colours:\n", nColours);
-    if(nColours > MAX_PALETTE_COLOURS) {
-        PRINTLOG("There are too many colours in the palette. using only the first %d\n", MAX_PALETTE_COLOURS);
-        nColours = MAX_PALETTE_COLOURS;
+    getColorPalette(&palettenColors, &nColors);  // grab the palette nColors and store a pointer to them for later use
+    PRINTLOG("The palette has %d nColors:\n", nColors);
+    if(nColors > MAX_PALETTE_nColors) {
+        PRINTLOG("There are too many nColors in the palette. using only the first %d\n", MAX_PALETTE_nColors);
+        nColors = MAX_PALETTE_nColors;
     }
 
-    for (int i = 0; i < nColours; i++) {
-        PRINTLOG("   %d %d %d\n", paletteColours[i].R, paletteColours[i].G, paletteColours[i].B);
+    for (int i = 0; i < nColors; i++) {
+        PRINTLOG("   %d %d %d\n", palettenColors[i].R, palettenColors[i].G, palettenColors[i].B);
     }
 
     layoutData = getLayoutData(); // grab the layout data and store a pointer to it for later use
@@ -142,12 +147,13 @@ void initPlugin() {
 
 
     // here we initialize our freqency bin values so that the plugin starts working reasonably well right away
-    for (int i = 0; i < MAX_PALETTE_COLOURS; i++) {
+    for (int i = 0; i < nColors; i++) {
         freq_bins[i].latest_minimum = 0;
         freq_bins[i].runningMax = 3;
         freq_bins[i].maximumTrigger = 1;
     }
-    enableFft(nColours);
+    enableFft(nColors);
+    enableBeatFeatures();
 }
 
 
@@ -214,9 +220,9 @@ void addSource(int paletteIndex, float intensity)
 
 
     // decide in the colour of this light source and factor in the intensity to arrive at an RGB value
-    int R = paletteColours[paletteIndex].R;
-    int G = paletteColours[paletteIndex].G;
-    int B = paletteColours[paletteIndex].B;
+    int R = palettenColors[paletteIndex].R;
+    int G = palettenColors[paletteIndex].G;
+    int B = palettenColors[paletteIndex].B;
     R *= intensity;
     G *= intensity;
     B *= intensity;
@@ -254,10 +260,16 @@ void renderPanel(Panel *panel, int *returnR, int *returnG, int *returnB)
     for(i = 0; i < nSources; i++) {
         float d = distance(panel->shape->getCentroid().x, panel->shape->getCentroid().y, sources[i].x, sources[i].y);
         d = d / ADJACENT_PANEL_DISTANCE;
-        float d2 = d * d;
-        float factor = 1.0 / (d2 * 1.5 + 1.0); // determines how much of the source's colour we mix in (depends on distance)
-                                               // the formula is not based on physics, it is fudged to get a good effect
-                                               // the formula yields a number between 0 and 1
+        float d2 = d*d;
+        float multiplier = 0;
+        if(TEMPO_ENABLED) multiplier = getTempo()/TEMPO_DIVISOR;
+        float factor = 1.0 / (d2*multiplier + 1.0);// determines how much of the source's colour we mix in (depends on distance)
+                                                  // the formula is not based on physics, it is fudged to get a good effect
+                                                  // the formula yields a number between 0 and 1
+        if(multiplier < MININMUM_MULTIPLIER) {
+          factor = 1.0 / (d2*MININMUM_MULTIPLIER + 1.0); // Tempo is finicky, this is to make sure when Tempo = 0 the entire panel doesn't spaz
+        }
+
         R = R * (1.0 - factor) + sources[i].R * factor;
         G = G * (1.0 - factor) + sources[i].G * factor;
         B = B * (1.0 - factor) + sources[i].B * factor;
@@ -331,7 +343,7 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
     }
 
     // Compute the sound power (or volume) in each bin
-    for(i = 0; i < nColours; i++) {
+    for(i = 0; i < nColors; i++) {
         freq_bins[i].soundPower = fftBins[i];
         uint8_t beat_detected = beat_detector(i);
 
@@ -375,6 +387,8 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
         sources[i].age++;
       }
     }
+    if(TEMPO_ENABLED) PRINTLOG("Tempo: %f T/DA: %f\n", getTempo(), getTempo()/TEMPO_DIVISOR);
+    //PRINTLOG("ONSET: %d\n", getIsOnset());
     // this algorithm renders every panel at every frame
     *nFrames = layoutData->nPanels;
 }
