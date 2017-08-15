@@ -174,27 +174,6 @@ float distance(float x1, float y1, float x2, float y2)
 }
 
 /**
-  * @description: compute the distance from a point to a line
-  * @param: x1, y1 and x2, y2 are two points that define the line
-  *         x3, y3 is the point
-  * @return: dist is the computed distance from the point to the closest point on the line
-  *          u is a scalar representing how far along the line do we need to go to get near
-  *          to the point
-  */
-void point2line(float x3, float y3, float x1, float y1, float x2, float y2, float *dist, float *u) // x3,y3 is the point
-{
-    float px = x2 - x1;
-    float py = y2 - y1;
-    float magnitude_squared = px * px + py * py;
-    *u = ((x3 - x1) * px + (y3 - y1) * py) / magnitude_squared;
-    float x = x1 + (*u) * px;
-    float y = y1 + (*u) * py;
-    float dx = x - x3;
-    float dy = y - y3;
-    *dist = sqrt(dx * dx + dy * dy);
-}
-
-/**
   * @description: Adds a light source to the list of light sources. The light source will have a particular colour
   * and intensity and will move at a particular speed.
 */
