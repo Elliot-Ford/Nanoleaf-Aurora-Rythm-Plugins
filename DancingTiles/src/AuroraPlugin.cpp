@@ -63,9 +63,9 @@ extern "C" {
 #define SPAWN_AMOUNT 1
 #define LIFESPAN 1 //the max number of cycles a source will live
 //Light Diffusion consts
-#define TEMPO_DIVISOR 25 //default is 1.5
-#define TEMPO_ENABLED false //determines if the tempo is taken into consideration for the diffusion
-#define MININMUM_MULTIPLIER 2 //minimum multiplier value used. Default is 1.5
+#define TEMPO_DIVISOR 25 //default is 25
+#define TEMPO_ENABLED true //determines if the tempo is taken into consideration for the diffusion
+#define MININMUM_MULTIPLIER 1.5 //minimum multiplier value used. Default is 1.5
 
 // Here we store the information accociated with each light source like current
 // position, velocity and colour. The information is stored in a list called sources.
@@ -134,7 +134,6 @@ void initPlugin() {
     for (int i = 0; i < nColors; i++) {
         PRINTLOG("   %d %d %d\n", palettenColors[i].R, palettenColors[i].G, palettenColors[i].B);
     }
-
     layoutData = getLayoutData(); // grab the layout data and store a pointer to it for later use
 
 
@@ -232,7 +231,7 @@ void renderPanel(Panel *panel, int *returnR, int *returnG, int *returnB)
     float G = BASE_COLOUR_G;
     float B = BASE_COLOUR_B;
     int i;
-
+    float tempo = getTempo() + 1;
     // Iterate through all the sources
     // Depending how close the source is to the panel, we take some fraction of its colour and mix it into an
     // accumulator. Newest sources have the most weight. Old sources die away until they are gone.
@@ -241,13 +240,17 @@ void renderPanel(Panel *panel, int *returnR, int *returnG, int *returnB)
         d = d / ADJACENT_PANEL_DISTANCE;
         float d2 = d*d;
         float multiplier = 0;
-        if(TEMPO_ENABLED) multiplier = getTempo()/TEMPO_DIVISOR;
+        if(TEMPO_ENABLED) {
+          multiplier = log(tempo+1) + MININMUM_MULTIPLIER;
+        } else {
+          multiplier = MININMUM_MULTIPLIER;
+        }
         float factor = 1.0 / (d2*multiplier + 1.0);// determines how much of the source's colour we mix in (depends on distance)
                                                   // the formula is not based on physics, it is fudged to get a good effect
                                                   // the formula yields a number between 0 and 1
-        if(multiplier < MININMUM_MULTIPLIER) {
-          factor = 1.0 / (d2*MININMUM_MULTIPLIER + 1.0); // Tempo is finicky, this is to make sure when Tempo = 0 the entire panel doesn't spaz
-        }
+        //if(multiplier < MININMUM_MULTIPLIER) {
+        //  factor = 1.0 / (d2*MININMUM_MULTIPLIER + 1.0); // Tempo is finicky, this is to make sure when Tempo = 0 the entire panel doesn't spaz
+        //}
 
         R = R * (1.0 - factor) + sources[i].R * factor;
         G = G * (1.0 - factor) + sources[i].G * factor;
@@ -366,7 +369,10 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
         sources[i].age++;
       }
     }
-    if(TEMPO_ENABLED) PRINTLOG("Tempo: %f T/DA: %f\n", getTempo(), getTempo()/TEMPO_DIVISOR);
+    if(TEMPO_ENABLED) {
+      float tempo = getTempo();
+      PRINTLOG("Tempo: %f : Diffuse Multiplier: %f\n", tempo, log(tempo+1) + MININMUM_MULTIPLIER);
+    }
     //PRINTLOG("ONSET: %d\n", getIsOnset());
     // this algorithm renders every panel at every frame
     *nFrames = layoutData->nPanels;
