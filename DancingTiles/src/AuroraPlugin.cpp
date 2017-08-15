@@ -50,22 +50,20 @@ extern "C" {
 }
 #endif
 
-#define MAX_PALETTE_nColors 7   // if more nColors then this, we will use just the first this many
-#define MAX_SOURCES 7   // maxiumum sources
 #define BASE_COLOUR_R 0 // these three settings defined the background colour; set to black
 #define BASE_COLOUR_G 0
 #define BASE_COLOUR_B 0
 #define ADJACENT_PANEL_DISTANCE 86.599995   // hard coded distance between adjacent panels; this ideally should be autodetected
 #define TRANSITION_TIME 1  // the transition time to send to panels; set to 100ms currently
 #define MINIMUM_INTENSITY 0.2  // the minimum intensity of a source
-#define TRIGGER_THRESHOLD 0.65 // used to calculate whether to add a source
+#define TRIGGER_THRESHOLD 0.7 // used to calculate whether to add a source
 //Light source consts
 #define SPAWN_AMOUNT 1
 #define LIFESPAN 1 //the max number of cycles a source will live
 //Light Diffusion consts
 #define TEMPO_DIVISOR 25 //default is 25
-#define TEMPO_ENABLED true //determines if the tempo is taken into consideration for the diffusion
-#define MININMUM_MULTIPLIER 1.5 //minimum multiplier value used. Default is 1.5
+#define TEMPO_ENABLED false //determines if the tempo is taken into consideration for the diffusion
+#define MININMUM_MULTIPLIER 1.5//minimum multiplier value used. Default is 1.5
 
 // Here we store the information accociated with each light source like current
 // position, velocity and colour. The information is stored in a list called sources.
@@ -95,9 +93,9 @@ typedef struct {
 static RGB_t* palettenColors = NULL; // this is our saved pointer to the colour palette
 static int nColors = 0;             // the number of nColors in the palette
 static LayoutData *layoutData; // this is our saved pointer to the panel layout information
-static source_t sources[MAX_SOURCES]; // this is our array for sources
+static source_t* sources; // this is our array for sources
 static int nSources = 0;
-static freq_bin freq_bins[MAX_PALETTE_nColors]; // this is our array for frequency bin historical information.
+static freq_bin* freqBins; // this is our array for frequency bin historical information.
 
 /**
   * @description: add a value to a running max.
@@ -123,18 +121,21 @@ int addToRunningMax(int runningMax, int valueToAdd, int effectiveTrail) {
  *
  */
 void initPlugin() {
-
+    layoutData = getLayoutData(); // grab the layout data and store a pointer to it for later use
     getColorPalette(&palettenColors, &nColors);  // grab the palette nColors and store a pointer to them for later use
     PRINTLOG("The palette has %d nColors:\n", nColors);
+#define MAX_PALETTE_nColors layoutData->nPanels - 2   // if more nColors then this, we will use just the first this many
+#define MAX_SOURCES layoutData->nPanels*LIFESPAN  // maxiumum sources
+    PRINTLOG("MAX_SOURCES: %d\n", MAX_SOURCES);
+
     if(nColors > MAX_PALETTE_nColors) {
         PRINTLOG("There are too many nColors in the palette. using only the first %d\n", MAX_PALETTE_nColors);
         nColors = MAX_PALETTE_nColors;
     }
-
+    sources = new source_t[MAX_SOURCES];
     for (int i = 0; i < nColors; i++) {
         PRINTLOG("   %d %d %d\n", palettenColors[i].R, palettenColors[i].G, palettenColors[i].B);
     }
-    layoutData = getLayoutData(); // grab the layout data and store a pointer to it for later use
 
 
     PRINTLOG("The layout has %d panels:\n", layoutData->nPanels);
@@ -144,12 +145,12 @@ void initPlugin() {
     }
 
 
-
+    freqBins = new freq_bin[MAX_PALETTE_nColors];
     // here we initialize our freqency bin values so that the plugin starts working reasonably well right away
     for (int i = 0; i < nColors; i++) {
-        freq_bins[i].latest_minimum = 0;
-        freq_bins[i].runningMax = 3;
-        freq_bins[i].maximumTrigger = 1;
+        freqBins[i].latest_minimum = 0;
+        freqBins[i].runningMax = 50;//Default 3
+        freqBins[i].maximumTrigger = 1;//Default 1
     }
     enableFft(nColors);
     enableBeatFeatures();
@@ -178,6 +179,7 @@ float distance(float x1, float y1, float x2, float y2)
 */
 void addSource(int paletteIndex, float intensity)
 {
+
     float x;
     float y;
     //int i;
@@ -245,7 +247,7 @@ void renderPanel(Panel *panel, int *returnR, int *returnG, int *returnB)
         } else {
           multiplier = MININMUM_MULTIPLIER;
         }
-        float factor = 1.0 / (d2*multiplier + 1.0);// determines how much of the source's colour we mix in (depends on distance)
+        float factor = 1.0 / (d2 * multiplier + 1.0);// determines how much of the source's colour we mix in (depends on distance)
                                                   // the formula is not based on physics, it is fudged to get a good effect
                                                   // the formula yields a number between 0 and 1
         //if(multiplier < MININMUM_MULTIPLIER) {
@@ -271,27 +273,27 @@ int16_t beat_detector(int i)
     int16_t beat_detected = 0;
 
     //Check for local maximum and if observed, add to running average
-    if((freq_bins[i].soundPower + (freq_bins[i].runningMax / 4) < freq_bins[i].previousPower) && (freq_bins[i].previousPower > freq_bins[i].secondPreviousPower)){
-        freq_bins[i].runningMax = addToRunningMax(freq_bins[i].runningMax, freq_bins[i].previousPower, 4);
+    if((freqBins[i].soundPower + (freqBins[i].runningMax / 4) < freqBins[i].previousPower) && (freqBins[i].previousPower > freqBins[i].secondPreviousPower)){
+        freqBins[i].runningMax = addToRunningMax(freqBins[i].runningMax, freqBins[i].previousPower, 4);
     }
 
     // update latest minimum.
-    if(freq_bins[i].soundPower < freq_bins[i].latest_minimum) {
-        freq_bins[i].latest_minimum = freq_bins[i].soundPower;
+    if(freqBins[i].soundPower < freqBins[i].latest_minimum) {
+        freqBins[i].latest_minimum = freqBins[i].soundPower;
     }
-    else if(freq_bins[i].latest_minimum > 0) {
-        freq_bins[i].latest_minimum--;
+    else if(freqBins[i].latest_minimum > 0) {
+        freqBins[i].latest_minimum--;
     }
 
     // criteria for a "beat"; value must exceed minimum plus a threshold of the runningMax.
-    if(freq_bins[i].soundPower > freq_bins[i].latest_minimum + (freq_bins[i].runningMax * TRIGGER_THRESHOLD)) {
-        freq_bins[i].latest_minimum = freq_bins[i].soundPower;
+    if(freqBins[i].soundPower > freqBins[i].latest_minimum + (freqBins[i].runningMax * TRIGGER_THRESHOLD)) {
+        freqBins[i].latest_minimum = freqBins[i].soundPower;
         beat_detected = 1;
     }
 
     // update historical information
-    freq_bins[i].secondPreviousPower = freq_bins[i].previousPower;
-    freq_bins[i].previousPower = freq_bins[i].soundPower;
+    freqBins[i].secondPreviousPower = freqBins[i].previousPower;
+    freqBins[i].previousPower = freqBins[i].soundPower;
 
     return beat_detected;
 }
@@ -326,19 +328,20 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
 
     // Compute the sound power (or volume) in each bin
     for(i = 0; i < nColors; i++) {
-        freq_bins[i].soundPower = fftBins[i];
+        //PRINTLOG("freq: %d max: %d power: %d\n", i, freqBins[i].runningMax, fftBins[i]);
+        freqBins[i].soundPower = fftBins[i];
         uint8_t beat_detected = beat_detector(i);
 
         if(beat_detected) {
-            if (freq_bins[i].soundPower > freq_bins[i].maximumTrigger) {
-                freq_bins[i].maximumTrigger = freq_bins[i].soundPower;
+            if (freqBins[i].soundPower > freqBins[i].maximumTrigger) {
+                freqBins[i].maximumTrigger = freqBins[i].soundPower;
             }
 
             float intensity = 1.0;
 
             //calculate an intensity ranging from minimum to 1, using log scale
-            if (freq_bins[i].soundPower > 1 && freq_bins[i].runningMax > 1){
-                intensity = ((log((float)freq_bins[i].soundPower) / log((float)freq_bins[i].runningMax)) * (1.0 - MINIMUM_INTENSITY)) + MINIMUM_INTENSITY;
+            if (freqBins[i].soundPower > 1 && freqBins[i].runningMax > 1){
+                intensity = ((log((float)freqBins[i].soundPower) / log((float)freqBins[i].runningMax)) * (1.0 - MINIMUM_INTENSITY)) + MINIMUM_INTENSITY;
             }
 
             if (intensity > 1.0) {
@@ -361,7 +364,9 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
         frames[i].b = B;
         frames[i].transTime = TRANSITION_TIME;
     }
-
+    if(nSources > 0){ // just to keep the logs from filling up to much
+      PRINTLOG("#sources: %d\n", nSources);
+    }
     for(i = 0; i < nSources; i++) {
       if(sources[i].age == LIFESPAN) {
         removeSource(0);
@@ -369,9 +374,11 @@ void getPluginFrame(Frame_t* frames, int* nFrames, int* sleepTime) {
         sources[i].age++;
       }
     }
+
     if(TEMPO_ENABLED) {
       float tempo = getTempo();
-      PRINTLOG("Tempo: %f : Diffuse Multiplier: %f\n", tempo, log(tempo+1) + MININMUM_MULTIPLIER);
+      PRINTLOG("Tempo: %f Tempo Multi: %f\n", tempo, log(tempo + 1) + MININMUM_MULTIPLIER);
+      //PRINTLOG("Energy Change: %d Energy Multi: %f\n", abs(getEnergy()-lastEnergy), (log(abs(getEnergy() - lastEnergy)+1) + MININMUM_MULTIPLIER));
     }
     //PRINTLOG("ONSET: %d\n", getIsOnset());
     // this algorithm renders every panel at every frame
