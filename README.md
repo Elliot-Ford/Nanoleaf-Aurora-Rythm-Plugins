@@ -3,7 +3,9 @@
 
 ## DancingTiles
   Uses a "diffusion" effect and beat detection found in one of the "FrequncyStars" example from the nanoleaf dev tools. The beat detection sets the color of a new light source from one of the 7 colors in the provided pallete based on the frequency and the light source is spawned at the center of a random panel.
+
   There's also the ability to enable tempo to change the diffusion amount, as the tempo increases the diffusion decreases logarithmically. The idea being that as you increase the number of light sources on the panel you want each individual light source to be more distict against the other light sources. A faster tempo song will in theory spawn more light sources. There's a chance that this will be changed to energy of the song.
+  
   To decrease "strobe" effect each light source has a "lifespan" so that it will last (assuming the it's not removed from the array for a new light source) to the next loop of getPluginFrame().
 
 ## DancingTilesOld
